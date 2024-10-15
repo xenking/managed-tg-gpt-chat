@@ -1,0 +1,93 @@
+// unknown_group is a bot that will say hello/goodbye when members enver/leave group. He will also leave any unknown groups he is invited to. Provide known groups as env var, e. g. KNOWN_GROUPS=-111,-222,333,444
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"strings"
+
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+
+	tm "github.com/xenking/managed-tg-gpt-chat/pkg/tgrouter"
+)
+
+// KnownGroups contains list of groups that bot can be invited to
+type KnownGroups struct {
+	ids []int64
+}
+
+// LoadFromEnv reads known groups from env var
+func (k *KnownGroups) LoadFromEnv() {
+	for _, idStr := range strings.Split(os.Getenv("KNOWN_GROUPS"), ",") {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+
+		k.ids = append(k.ids, id)
+	}
+}
+
+// IsKnownGroup checks if groups is known
+func (k *KnownGroups) IsKnownGroup(id int64) bool {
+	for _, otherID := range k.ids {
+		if id == otherID {
+			return true
+		}
+	}
+
+	return false
+}
+
+var knownGroups KnownGroups
+
+func main() {
+	bot, err := tgbotapi.NewBotAPI(os.Getenv("TG_TOKEN"))
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	bot.Debug = true
+	u := tgbotapi.NewUpdate(0)
+	u.Timeout = 60
+
+	knownGroups.LoadFromEnv()
+
+	updates := bot.GetUpdatesChan(u)
+	mux := tm.NewRouter().
+		Mount(tm.NewRoute(
+			tm.IsNewChatMembers(),
+			func(u *tm.Update) {
+				chat := u.EffectiveChat()
+				// Check every new member
+				for _, user := range u.Message.NewChatMembers {
+					if user.ID == bot.Self.ID {
+						// This is us!
+						if !knownGroups.IsKnownGroup(chat.ID) {
+							// Group is unknown, leave chat
+							bot.Send(tgbotapi.LeaveChatConfig{ChatID: chat.ID})
+						}
+					} else {
+						// Greet new member
+						bot.Send(tgbotapi.NewMessage(chat.ID, fmt.Sprintf("Hello, %s!", user.UserName)))
+					}
+				}
+			},
+		)).
+		Mount(tm.NewRoute(
+			tm.IsLeftChatMember(),
+			func(u *tm.Update) {
+				// Say goodbye to a member who has just left
+				bot.Send(tgbotapi.NewMessage(
+					u.Message.Chat.ID,
+					fmt.Sprintf("Goodbye, %s!", u.Message.LeftChatMember.UserName),
+				))
+			},
+		))
+
+	for update := range updates {
+		mux.Dispatch(bot, update)
+	}
+}

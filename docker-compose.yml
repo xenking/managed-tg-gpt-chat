@@ -1,0 +1,17 @@
+include:
+  - temporal-server/docker-compose.yml
+services:
+  managed-tg-gpt-chat:
+    container_name: managed-tg-gpt-chat
+    build:
+      context: .
+      dockerfile: build/Dockerfile
+    depends_on:
+      - temporal
+    env_file:
+      - .env
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    image: xenking/managed-tg-gpt-chat:latest
+    networks:
+      - temporal-network
